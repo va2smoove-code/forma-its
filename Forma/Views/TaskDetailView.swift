@@ -7,14 +7,12 @@ struct TaskDetailView: View {
         Form {
             Section("Title") {
                 TextField("Title", text: $task.title)
-            }
-            
-            Section("Notes") {
-                TextEditor(text: $task.notes)
-                    .frame(minHeight: 120)
+                    .textInputAutocapitalization(.sentences)
+                    .disableAutocorrection(false)
             }
 
             Section("Schedule") {
+                // Toggle controls presence of time
                 Toggle("Has time", isOn: Binding(
                     get: { task.time != nil },
                     set: { hasTime in
@@ -23,11 +21,20 @@ struct TaskDetailView: View {
                 ))
 
                 if let _ = task.time {
-                    DatePicker("Time", selection: Binding(
-                        get: { task.time ?? Date() },
-                        set: { task.time = $0 }
-                    ), displayedComponents: [.hourAndMinute, .date])
+                    DatePicker(
+                        "Time",
+                        selection: Binding(
+                            get: { task.time ?? Date() },
+                            set: { task.time = $0 }
+                        ),
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
                 }
+            }
+
+            Section("Notes") {
+                TextEditor(text: $task.notes)
+                    .frame(minHeight: 140)
             }
 
             Section {
