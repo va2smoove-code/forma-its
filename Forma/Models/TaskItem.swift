@@ -6,7 +6,9 @@ struct TaskItem: Identifiable, Hashable, Codable {
     var title: String
     var time: Date? = nil
     var isDone: Bool = false
+    var notes: String = ""   // new field
 }
+
 
 final class TaskStore: ObservableObject {
     @Published var items: [TaskItem] = [] {

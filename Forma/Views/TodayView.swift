@@ -10,34 +10,38 @@ struct TodayView: View {
         NavigationStack {
             List {
                 ForEach(Array(store.items.enumerated()), id: \.element.id) { index, task in
-                    HStack(spacing: 12) {
-                        Button {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                store.items[index].isDone.toggle()
-                                let generator = UIImpactFeedbackGenerator(style: .medium)
-                                generator.impactOccurred()
+                    NavigationLink {
+                        TaskDetailView(task: $store.items[index])
+                    } label: {
+                        HStack(spacing: 12) {
+                            Button {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    store.items[index].isDone.toggle()
+                                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                                    generator.impactOccurred()
+                                }
+                            } label: {
+                                Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
+                                    .imageScale(.large)
+                                    .foregroundColor(task.isDone ? .formaAccent : .formaSubtext)
                             }
-                        } label: {
-                            Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
-                                .imageScale(.large)
-                                .foregroundColor(task.isDone ? .formaAccent : .formaSubtext)
-                        }
-                        .buttonStyle(.plain)
+                            .buttonStyle(.plain)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(task.title)
-                                .font(.formaBody)
-                                .foregroundStyle(Color.formaText)
-                                .strikethrough(task.isDone)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(task.title)
+                                    .font(.formaBody)
+                                    .foregroundStyle(Color.formaText)
+                                    .strikethrough(task.isDone)
 
-                            if let t = task.time {
-                                Text(t, style: .time)
-                                    .font(.formaCaption)
-                                    .foregroundStyle(Color.formaSubtext)
+                                if let t = task.time {
+                                    Text(t, style: .time)
+                                        .font(.formaCaption)
+                                        .foregroundStyle(Color.formaSubtext)
+                                }
                             }
                         }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
                             store.items.remove(at: index)
