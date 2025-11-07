@@ -12,7 +12,11 @@ struct TodayView: View {
                 ForEach(Array(store.items.enumerated()), id: \.element.id) { index, task in
                     HStack(spacing: 12) {
                         Button {
-                            store.items[index].isDone.toggle()
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                store.items[index].isDone.toggle()
+                                let generator = UIImpactFeedbackGenerator(style: .medium)
+                                generator.impactOccurred()
+                            }
                         } label: {
                             Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
                                 .imageScale(.large)
