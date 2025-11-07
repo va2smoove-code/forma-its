@@ -7,15 +7,15 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $selected) {
-            Text("Today")
-                .tabItem { Label("Today", systemImage: "sun.max") }
-                .tag(Tab.today)
+            TodayView()
+                    .tabItem { Label("Today", systemImage: "sun.max") }
+                    .tag(Tab.today)
 
             Text("Calendar")
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(Tab.calendar)
 
-            Text("Focus")
+            FocusView()
                 .tabItem { Label("Focus", systemImage: "timer") }
                 .tag(Tab.focus)
 
