@@ -1,10 +1,14 @@
 import SwiftUI
 
 struct RootView: View {
-    @EnvironmentObject var appState: AppState
+    @State private var selected: Tab = .today
+
+    enum Tab: Hashable {
+        case today, calendar, focus, notes, review
+    }
 
     var body: some View {
-        TabView(selection: $appState.selectedTab) {
+        TabView(selection: $selected) {
             TodayView()
                 .tabItem { Label("Today", systemImage: "sun.max") }
                 .tag(Tab.today)
@@ -13,7 +17,7 @@ struct RootView: View {
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(Tab.calendar)
 
-            FocusView()
+            Text("Focus")
                 .tabItem { Label("Focus", systemImage: "timer") }
                 .tag(Tab.focus)
 
