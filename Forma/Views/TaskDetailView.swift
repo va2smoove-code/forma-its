@@ -2,6 +2,9 @@ import SwiftUI
 
 struct TaskDetailView: View {
     @Binding var task: TaskItem
+    let index: Int
+    @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Form {
@@ -39,6 +42,26 @@ struct TaskDetailView: View {
 
             Section {
                 Toggle("Completed", isOn: $task.isDone)
+            }
+            
+            Section {
+                Button {
+                    withAnimation(.spring()) {
+                        appState.focusTitle = task.title
+                        appState.focusIndex = index 
+                        appState.selectedTab = .focus
+                        dismiss()
+                    }
+                } label: {
+                    Text("Start Focus")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .background(Color.formaAccent)
+                        .cornerRadius(12)
+                }
+                .listRowBackground(Color.clear)
             }
         }
         .navigationTitle("Task")

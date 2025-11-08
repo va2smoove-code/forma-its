@@ -13,9 +13,10 @@ private enum ActiveSheet: Identifiable {
 }
 
 struct TodayView: View {
-    @StateObject private var store = TaskStore()
+    @EnvironmentObject var store: TaskStore
     @State private var activeSheet: ActiveSheet? = nil
     @State private var newTitle = ""
+    @EnvironmentObject var appState: AppState
 
     var body: some View {
         NavigationStack {
@@ -117,7 +118,8 @@ struct TodayView: View {
 
                 case .edit(let i):
                     NavigationStack {
-                        TaskDetailView(task: $store.items[i])
+                        TaskDetailView(task: $store.items[i], index: i)
+                            .environmentObject(appState)
                             .navigationTitle("Task")
                             .toolbar {
                                 ToolbarItem(placement: .confirmationAction) {
