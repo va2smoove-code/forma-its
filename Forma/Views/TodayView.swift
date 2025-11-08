@@ -34,11 +34,7 @@ struct TodayView: View {
 
     struct SelectedTask: Identifiable { let index: Int; var id: Int { index } }
 
-    enum SortMode: String, CaseIterable {
-        case manual = "Manual"
-        case date = "Date"
-        case importance = "Importance"
-    }
+    enum SortMode: String, CaseIterable { case manual = "Manual", date = "Date", importance = "Importance" }
 
     // MARK: - State
     @State private var items: [Task] = []
@@ -48,12 +44,49 @@ struct TodayView: View {
     @State private var hasLoaded = false
     @State private var sortMode: SortMode = .manual
 
+    // Filters (temporary / in-memory)
+    @State private var filterImportance: Task.Importance? = nil
+    @State private var filterTags = Set<String>()
+    @State private var showingFilterSheet = false
+
+    // MARK: - Derived
+    private var allTags: [String] {
+        Array(Set(items.flatMap { $0.tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } }
+                     .filter { !$0.isEmpty }
+                     .map { $0.lowercased() }))
+            .sorted()
+    }
+
+    private var displayedIndices: [Int] {
+        items.indices.filter { i in
+            let t = items[i]
+            if let f = filterImportance, t.importance != f { return false }
+            if !filterTags.isEmpty {
+                let set = Set(t.tags.map { $0.lowercased() })
+                if set.isDisjoint(with: filterTags) { return false }
+            }
+            return true
+        }
+    }
+
     // MARK: - Body
     var body: some View {
         NavigationStack {
             List {
+                if filterImportance != nil || !filterTags.isEmpty {
+                    Section {
+                        ActiveFiltersRow(
+                            importance: filterImportance,
+                            tags: Array(filterTags).sorted(),
+                            onClearImportance: { filterImportance = nil },
+                            onRemoveTag: { tag in filterTags.remove(tag) },
+                            onClearAll: clearAllFilters
+                        )
+                    }
+                }
+
                 Section("Today") {
-                    ForEach(items.indices, id: \.self) { i in
+                    ForEach(displayedIndices, id: \.self) { i in
                         let t = items[i]
                         TaskRowSimple(
                             title: t.title,
@@ -70,7 +103,7 @@ struct TodayView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { selected = SelectedTask(index: i) }
                     }
-                    .onDelete(perform: delete)
+                    .onDelete(perform: deleteDisplayed)
                 }
             }
             .listStyle(.insetGrouped)
@@ -88,25 +121,22 @@ struct TodayView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingFilterSheet = true } label: {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         draft = Task(title: "")
                         showingAdd = true
                     } label: { Image(systemName: "plus") }
                 }
             }
-            // Persist + load + react to sort changes
-            .onChange(of: items) { _, _ in
-                save()
-            }
-            .onChange(of: sortMode) { _, _ in
-                resort()
-            }
-            .onAppear {
-                loadIfNeeded()
-                resort()
-            }
+            .onChange(of: items) { _, _ in save() }
+            .onChange(of: sortMode) { _, _ in resort() }
+            .onAppear { loadIfNeeded(); resort() }
 
-            // Edit sheet
+            // Edit
             .sheet(item: $selected) { sel in
                 TaskEditor(
                     task: Binding(
@@ -120,7 +150,7 @@ struct TodayView: View {
                 )
             }
 
-            // Add (+)
+            // Add
             .sheet(isPresented: $showingAdd) {
                 TaskEditor(
                     task: $draft,
@@ -132,7 +162,6 @@ struct TodayView: View {
                         toInsert.title = parsed.cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
                         toInsert.importance = parsed.importance
                         toInsert.when = parsed.when
-
                         if !toInsert.title.isEmpty {
                             items.insert(toInsert, at: 0)
                             resort()
@@ -142,22 +171,26 @@ struct TodayView: View {
                     onCancel: { showingAdd = false }
                 )
             }
+
+            // Filter sheet
+            .sheet(isPresented: $showingFilterSheet) {
+                FilterSheet(
+                    allTags: allTags,
+                    filterImportance: $filterImportance,
+                    filterTags: $filterTags,
+                    onClearAll: clearAllFilters
+                )
+            }
         }
     }
 
     // MARK: - Sorting
     private func resort() {
-        guard sortMode != .manual else {
-            // Manual: keep items as-is, but still push completed to bottom within “manual” intent
-            items = stableGroupDone(items)
-            return
-        }
         switch sortMode {
         case .manual:
             items = stableGroupDone(items)
         case .date:
             items = stableGroupDone(items).sorted(by: { a, b in
-                // earlier date first; nil last
                 switch (a.when, b.when) {
                 case let (lhs?, rhs?): return lhs < rhs
                 case (nil, _?): return false
@@ -173,38 +206,27 @@ struct TodayView: View {
             })
         }
     }
-
     private func stableGroupDone(_ arr: [Task]) -> [Task] {
         let open = arr.filter { !$0.isDone }
         let done = arr.filter { $0.isDone }
         return open + done
     }
-
     private func weight(_ imp: Task.Importance) -> Int {
-        switch imp {
-        case .high: return 0
-        case .normal: return 1
-        case .low: return 2
-        }
+        switch imp { case .high: return 0; case .normal: return 1; case .low: return 2 }
     }
 
     // MARK: - Persistence
     private let fileName = "today_tasks.json"
-
     private func fileURL() -> URL {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         return dir.appendingPathComponent(fileName)
     }
-
     private func save() {
         do {
             let data = try JSONEncoder().encode(items)
             try data.write(to: fileURL(), options: .atomic)
-        } catch {
-            print("Save error:", error)
-        }
+        } catch { print("Save error:", error) }
     }
-
     private func loadIfNeeded() {
         guard !hasLoaded else { return }
         hasLoaded = true
@@ -220,18 +242,111 @@ struct TodayView: View {
                 ]
                 save()
             }
-        } catch {
-            print("Load error:", error)
-        }
+        } catch { print("Load error:", error) }
     }
 
     // MARK: - Actions
-    private func delete(at offsets: IndexSet) {
-        items.remove(atOffsets: offsets)
+    private func deleteDisplayed(at offsets: IndexSet) {
+        let backing = displayedIndices
+        let toDelete = offsets.map { backing[$0] }.sorted(by: >)
+        for i in toDelete { items.remove(at: i) }
+    }
+    private func clearAllFilters() {
+        filterImportance = nil
+        filterTags.removeAll()
     }
 }
 
-// MARK: - Compact Row with tags
+// MARK: - Filter sheet
+private struct FilterSheet: View {
+    let allTags: [String]
+    @Binding var filterImportance: TodayView.Task.Importance?
+    @Binding var filterTags: Set<String>
+    var onClearAll: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Importance") {
+                    Picker("Show", selection: Binding(
+                        get: { filterImportance?.rawValue ?? "All" },
+                        set: { raw in filterImportance = TodayView.Task.Importance(rawValue: raw) }
+                    )) {
+                        Text("All").tag("All")
+                        ForEach(TodayView.Task.Importance.allCases) { imp in
+                            Text(imp.rawValue).tag(imp.rawValue)
+                        }
+                    }
+                }
+                Section("Tags") {
+                    if allTags.isEmpty {
+                        Text("No tags yet").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(allTags, id: \.self) { tag in
+                            Toggle(isOn: Binding(
+                                get: { filterTags.contains(tag) },
+                                set: { on in
+                                    if on { filterTags.insert(tag) } else { filterTags.remove(tag) }
+                                }
+                            )) { Text(tag) }
+                        }
+                    }
+                }
+                if filterImportance != nil || !filterTags.isEmpty {
+                    Section { Button("Clear filters", role: .destructive) { onClearAll() } }
+                }
+            }
+            .navigationTitle("Filters")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+// MARK: - Active filters row
+private struct ActiveFiltersRow: View {
+    let importance: TodayView.Task.Importance?
+    let tags: [String]
+    let onClearImportance: () -> Void
+    let onRemoveTag: (String) -> Void
+    let onClearAll: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if let imp = importance {
+                    Chip(text: "\(imp.rawValue)", onRemove: onClearImportance)
+                }
+                ForEach(tags, id: \.self) { tag in
+                    Chip(text: tag) { onRemoveTag(tag) }
+                }
+                Button { onClearAll() } label: {
+                    Label("Clear", systemImage: "xmark.circle").font(.caption)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private struct Chip: View {
+        let text: String
+        let onRemove: () -> Void
+        var body: some View {
+            HStack(spacing: 6) {
+                Text(text).font(.caption2)
+                Button(action: onRemove) { Image(systemName: "xmark.circle.fill").imageScale(.small) }
+                    .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(Capsule())
+        }
+    }
+}
+
+// MARK: - Row
 private struct TaskRowSimple: View {
     let title: String
     let isDone: Bool
@@ -258,7 +373,6 @@ private struct TaskRowSimple: View {
                 Spacer(minLength: 0)
             }
 
-            // Metadata row
             HStack(spacing: 10) {
                 if let when {
                     HStack(spacing: 4) {
@@ -290,7 +404,6 @@ private struct TaskRowSimple: View {
                 }
             }
 
-            // Tags row (chips)
             if !tags.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -311,7 +424,7 @@ private struct TaskRowSimple: View {
     }
 }
 
-// MARK: - Reusable Editor (with tags)
+// MARK: - Task editor
 private struct TaskEditor: View {
     @Binding var task: TodayView.Task
     let title: String
@@ -340,7 +453,6 @@ private struct TaskEditor: View {
                         .onChange(of: hasWhen) { _, on in
                             task.when = on ? (task.when ?? Date()) : nil
                         }
-
                     if hasWhen {
                         DatePicker(
                             "When",
@@ -362,7 +474,6 @@ private struct TaskEditor: View {
                     .pickerStyle(.segmented)
                 }
 
-                // Tags editor
                 Section("Tags") {
                     HStack(spacing: 8) {
                         TextField("Add tag", text: $tagInput)
@@ -370,14 +481,12 @@ private struct TaskEditor: View {
                         Button("Add") { addTagFromInput() }
                             .disabled(tagInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-
                     if !task.tags.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(task.tags, id: \.self) { tag in
                                     HStack(spacing: 6) {
-                                        Text(tag)
-                                            .font(.caption2)
+                                        Text(tag).font(.caption2)
                                         Button {
                                             remove(tag)
                                         } label: {
@@ -396,16 +505,12 @@ private struct TaskEditor: View {
                     }
                 }
 
-                Section {
-                    Toggle("Completed", isOn: $task.isDone)
-                }
+                Section { Toggle("Completed", isOn: $task.isDone) }
             }
             .onAppear { hasWhen = (task.when != nil) }
             .navigationTitle(title)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onCancel() }
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { onCancel() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(primaryButtonTitle) { onPrimary() }
                         .disabled(task.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -414,25 +519,23 @@ private struct TaskEditor: View {
         }
     }
 
-    // MARK: - Tag helpers
+    // Tag helpers
     private func addTagFromInput() {
         let tokens = tagInput
             .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" })
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-
         guard !tokens.isEmpty else { return }
         var set = Set(task.tags.map { $0.lowercased() })
         for t in tokens {
-            let key = t.lowercased()
-            if !set.contains(key) {
+            let k = t.lowercased()
+            if !set.contains(k) {
                 task.tags.append(t)
-                set.insert(key)
+                set.insert(k)
             }
         }
         tagInput = ""
     }
-
     private func remove(_ tag: String) {
         task.tags.removeAll { $0.caseInsensitiveCompare(tag) == .orderedSame }
     }

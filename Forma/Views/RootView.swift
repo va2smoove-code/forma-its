@@ -13,7 +13,7 @@ struct RootView: View {
                 .tabItem { Label("Today", systemImage: "sun.max") }
                 .tag(Tab.today)
 
-            Text("Calendar")
+            CalendarView()   // <-- swap in the real view
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(Tab.calendar)
 
