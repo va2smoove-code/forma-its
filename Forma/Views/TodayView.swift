@@ -13,7 +13,7 @@ struct TodayView: View {
         var notes: String
         var when: Date?
         var importance: Importance
-        var tags: [String]                     // <— NEW
+        var tags: [String]
 
         init(id: UUID = UUID(),
              title: String,
@@ -34,12 +34,19 @@ struct TodayView: View {
 
     struct SelectedTask: Identifiable { let index: Int; var id: Int { index } }
 
+    enum SortMode: String, CaseIterable {
+        case manual = "Manual"
+        case date = "Date"
+        case importance = "Importance"
+    }
+
     // MARK: - State
     @State private var items: [Task] = []
     @State private var selected: SelectedTask? = nil
     @State private var showingAdd = false
     @State private var draft = Task(title: "")
     @State private var hasLoaded = false
+    @State private var sortMode: SortMode = .manual
 
     // MARK: - Body
     var body: some View {
@@ -55,7 +62,10 @@ struct TodayView: View {
                             importance: t.importance,
                             hasNotes: !t.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                             tags: t.tags,
-                            onToggle: { items[i].isDone.toggle() }
+                            onToggle: {
+                                items[i].isDone.toggle()
+                                resort()
+                            }
                         )
                         .contentShape(Rectangle())
                         .onTapGesture { selected = SelectedTask(index: i) }
@@ -67,22 +77,41 @@ struct TodayView: View {
             .navigationTitle("Today")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Sort", selection: $sortMode) {
+                            ForEach(SortMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                    } label: {
+                        Label("Sort", systemImage: "arrow.up.arrow.down")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         draft = Task(title: "")
                         showingAdd = true
                     } label: { Image(systemName: "plus") }
                 }
             }
-            // Persist + load
-            .onChange(of: items) { _, _ in save() }
-            .onAppear(perform: loadIfNeeded)
+            // Persist + load + react to sort changes
+            .onChange(of: items) { _, _ in
+                save()
+            }
+            .onChange(of: sortMode) { _, _ in
+                resort()
+            }
+            .onAppear {
+                loadIfNeeded()
+                resort()
+            }
 
-            // Edit
+            // Edit sheet
             .sheet(item: $selected) { sel in
                 TaskEditor(
                     task: Binding(
                         get: { items[sel.index] },
-                        set: { items[sel.index] = $0 }
+                        set: { items[sel.index] = $0; resort() }
                     ),
                     title: "Task",
                     primaryButtonTitle: "Done",
@@ -106,12 +135,56 @@ struct TodayView: View {
 
                         if !toInsert.title.isEmpty {
                             items.insert(toInsert, at: 0)
+                            resort()
                         }
                         showingAdd = false
                     },
                     onCancel: { showingAdd = false }
                 )
             }
+        }
+    }
+
+    // MARK: - Sorting
+    private func resort() {
+        guard sortMode != .manual else {
+            // Manual: keep items as-is, but still push completed to bottom within “manual” intent
+            items = stableGroupDone(items)
+            return
+        }
+        switch sortMode {
+        case .manual:
+            items = stableGroupDone(items)
+        case .date:
+            items = stableGroupDone(items).sorted(by: { a, b in
+                // earlier date first; nil last
+                switch (a.when, b.when) {
+                case let (lhs?, rhs?): return lhs < rhs
+                case (nil, _?): return false
+                case (_?, nil): return true
+                default: return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
+                }
+            })
+        case .importance:
+            items = stableGroupDone(items).sorted(by: { a, b in
+                weight(a.importance) < weight(b.importance)
+                || (weight(a.importance) == weight(b.importance)
+                    && a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending)
+            })
+        }
+    }
+
+    private func stableGroupDone(_ arr: [Task]) -> [Task] {
+        let open = arr.filter { !$0.isDone }
+        let done = arr.filter { $0.isDone }
+        return open + done
+    }
+
+    private func weight(_ imp: Task.Importance) -> Int {
+        switch imp {
+        case .high: return 0
+        case .normal: return 1
+        case .low: return 2
         }
     }
 
@@ -299,7 +372,6 @@ private struct TaskEditor: View {
                     }
 
                     if !task.tags.isEmpty {
-                        // show tags with remove buttons
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(task.tags, id: \.self) { tag in
@@ -328,9 +400,7 @@ private struct TaskEditor: View {
                     Toggle("Completed", isOn: $task.isDone)
                 }
             }
-            .onAppear {
-                hasWhen = (task.when != nil)
-            }
+            .onAppear { hasWhen = (task.when != nil) }
             .navigationTitle(title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -352,7 +422,7 @@ private struct TaskEditor: View {
             .filter { !$0.isEmpty }
 
         guard !tokens.isEmpty else { return }
-        var set = Set(task.tags.map { $0.lowercased() })     // avoid duplicates (case-insensitive)
+        var set = Set(task.tags.map { $0.lowercased() })
         for t in tokens {
             let key = t.lowercased()
             if !set.contains(key) {
