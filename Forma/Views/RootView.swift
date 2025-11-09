@@ -1,33 +1,43 @@
+//
+//  RootView.swift
+//  Forma
+//
+//  Purpose:
+//  - Hosts the main TabView with five sections.
+//
+//  Created by Forma.
+//
+
 import SwiftUI
+
+enum Tab: Hashable {
+    case today, calendar, focus, notes, review
+}
 
 struct RootView: View {
     @State private var selected: Tab = .today
 
-    enum Tab: Hashable {
-        case today, calendar, focus, notes, review
-    }
-
     var body: some View {
         TabView(selection: $selected) {
             TodayView()
-                .tabItem { Label("Today", systemImage: "sun.max") }
                 .tag(Tab.today)
+                .tabItem { Label("Today", systemImage: "sun.max") }
 
-            CalendarView()   // <-- swap in the real view
-                .tabItem { Label("Calendar", systemImage: "calendar") }
+            CalendarView()
                 .tag(Tab.calendar)
+                .tabItem { Label("Calendar", systemImage: "calendar") }
 
-            Text("Focus")
-                .tabItem { Label("Focus", systemImage: "timer") }
+            FocusView()
                 .tag(Tab.focus)
+                .tabItem { Label("Focus", systemImage: "timer") }
 
-            Text("Notes")
-                .tabItem { Label("Notes", systemImage: "note.text") }
+            NotesView()
                 .tag(Tab.notes)
+                .tabItem { Label("Notes", systemImage: "note.text") }
 
-            Text("Review")
-                .tabItem { Label("Review", systemImage: "chart.line.uptrend.xyaxis") }
+            ReviewView()
                 .tag(Tab.review)
+                .tabItem { Label("Review", systemImage: "chart.line.uptrend.xyaxis") }
         }
     }
 }
