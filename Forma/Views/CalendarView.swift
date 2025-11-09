@@ -2,18 +2,55 @@
 //  CalendarView.swift
 //  Forma
 //
-//  Purpose:
-//  - Infinite month scroller with weekday strip.
-//  - Large title matches Today view.
-//
-//  Created by Forma.
+//  Reconstructed to ensure:
+//  - Jump to TODAY whenever switching in from another tab.
+//  - Do NOTHING when Calendar tab is tapped again while already visible.
+//  - Stable, fixed month window (−40…+40) to avoid random jumps.
 //
 
 import SwiftUI
 
-// MARK: - Month position tracking (for header month if needed later)
+// Notification for TabView reselection of the Calendar tab
+private extension Notification.Name {
+    static let calendarTabReselected = Notification.Name("CalendarTabReselected")
+}
 
-private struct MonthPos: Equatable {
+// =====================================================
+// MARK: - Helpers (Dates, IDs, Weekday Symbols)
+// =====================================================
+
+private func startOfMonth(for date: Date) -> Date {
+    let cal = Calendar.current
+    let comps = cal.dateComponents([.year, .month], from: date)
+    return cal.date(from: comps) ?? date
+}
+
+private func monthTitle(_ d: Date) -> String {
+    let f = DateFormatter()
+    f.locale = .current
+    f.setLocalizedDateFormatFromTemplate("yMMMM") // e.g. “November 2025”
+    return f.string(from: d)
+}
+
+private var weekdaysShort: [String] {
+    let f = DateFormatter()
+    f.locale = .current
+    return f.shortWeekdaySymbols
+}
+
+private func calendarMonthID(_ date: Date) -> String {
+    let f = DateFormatter()
+    f.locale = .current
+    f.dateFormat = "yyyy-MM"
+    return f.string(from: date)
+}
+
+private func todayMonthID() -> String {
+    calendarMonthID(startOfMonth(for: Date()))
+}
+
+// Track month positions while scrolling so we can update the header month label
+private struct MonthPos: Equatable, Identifiable {
     let id: String
     let y: CGFloat
     let date: Date
@@ -26,178 +63,396 @@ private struct MonthPosKey: PreferenceKey {
     }
 }
 
-struct CalendarView: View {
-    @State private var selectedDate = Date()
-    @State private var headerMonth: Date = Date()
+// =====================================================
+// MARK: - CalendarView (stable + predictable)
+// =====================================================
 
-    private let monthRange = (-240...240) // ~20y before/after
+struct CalendarView: View {
+
+    // Fixed window around today for stability
+    @State private var months: [Int] = Array((-40)...40)
+
+    // Selection + header month label
+    @State private var selectedDate: Date = Date()
+    @State private var currentHeaderMonth: Date = startOfMonth(for: Date())
+
+    // Persist the last visible month id across scene recreations
+    @SceneStorage("calendar.lastVisibleMonthID")
+    private var persistedMonthID: String = todayMonthID()
+
+    // Add Mode & Add Sheet state
+    @State private var isAddMode: Bool = false
+    @State private var showingAdd: Bool = false
+    @State private var draftTitle: String = ""
+    @State private var draftWhen: Date = Calendar.current.startOfDay(for: Date())
+    // Prevent the button tap from firing immediately after a long-press
+    @State private var suppressNextTap: Bool = false
 
     var body: some View {
-        NavigationStack {
+        ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                // Month+Year label (optional—kept to match prior layout)
-                Text(monthTitle(headerMonth))
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 2)
-                    .padding(.bottom, 6)
 
-                WeekdayStrip()
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 6)
+                // ---------- Header (matches Today’s capsule) ----------
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Calendar")
+                        .font(.largeTitle.bold())
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button {
+                        jumpToToday(proxy)
+                    } label: {
+                        Text("Today")
+                            .font(.headline)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .frame(minWidth: 72)
+                    }
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                    .contentShape(Capsule())
+                    .buttonStyle(.plain)
+
+                    // Add (+) button — tap: open sheet; long-press: enter Add Mode; tap while active = Cancel
+                    Button {
+                        // If we just long-pressed, ignore the release-triggered tap once
+                        if suppressNextTap {
+                            suppressNextTap = false
+                            return
+                        }
+                        if isAddMode {
+                            // Tap while in Add Mode → Cancel
+                            #if os(iOS)
+                            let gen = UIImpactFeedbackGenerator(style: .light)
+                            gen.impactOccurred()
+                            #endif
+                            withAnimation(.easeOut(duration: 0.2)) { isAddMode = false }
+                        } else {
+                            // Tap → open sheet, prefill with selected or today
+                            draftWhen = Calendar.current.startOfDay(for: selectedDate)
+                            draftTitle = ""
+                            showingAdd = true
+                        }
+                    } label: {
+                        Image(systemName: isAddMode ? "xmark" : "plus")
+                            .font(.headline)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .frame(minWidth: 44)
+                            .animation(.easeOut(duration: 0.15), value: isAddMode)
+                            .accessibilityLabel(isAddMode ? "Cancel add" : "Add task")
+                            .accessibilityHint(isAddMode ? "Exit add mode" : "Tap to add. Long-press to choose a date from the calendar.")
+                    }
+                    .background(
+                        Group {
+                            if isAddMode { Color.accentColor.opacity(0.12) } else { Color.clear }
+                        }, in: Capsule()
+                    )
+                    .overlay(
+                        Capsule().stroke(isAddMode ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(isAddMode ? 0.28 : 0.25), radius: 12, y: 4)
+                    .contentShape(Capsule())
+                    .buttonStyle(.plain)
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                            // Long-press → enter Add Mode (stays active until canceled)
+                            #if os(iOS)
+                            let gen = UIImpactFeedbackGenerator(style: .soft)
+                            gen.impactOccurred()
+                            #endif
+                            if !isAddMode {
+                                withAnimation(.easeOut(duration: 0.2)) { isAddMode = true }
+                            }
+                            // Suppress the immediate tap that fires on touch-up after long-press
+                            suppressNextTap = true
+                        }
+                    )
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
 
                 Divider().opacity(0.08)
 
+                // ---------- Subheader (Month + Year) ----------
+                Text(monthTitle(currentHeaderMonth))
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+
+                // ---------- Weekday Strip ----------
+                HStack {
+                    ForEach(weekdaysShort, id: \.self) { w in
+                        Text(w.uppercased())
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+
+                // ---------- Month Grids ----------
                 ScrollView {
-                    LazyVStack(spacing: 24) {
-                        ForEach(monthRange, id: \.self) { offset in
-                            let monthAnchor = startOfMonth(for: addMonths(to: Date(), offset))
-                            MonthGridSection(monthAnchor: monthAnchor, selected: $selectedDate)
-                                .id(monthID(monthAnchor))
+                    LazyVStack(alignment: .leading, spacing: 28) {
+                        ForEach(months, id: \.self) { offset in
+                            let monthAnchor = startOfMonth(
+                                for: Calendar.current.date(byAdding: .month, value: offset, to: Date()) ?? Date()
+                            )
+
+                            CalendarMonthGridSection(
+                                monthAnchor: monthAnchor,
+                                selected: $selectedDate,
+                                onDayTapped: { date in
+                                    if isAddMode {
+                                        // In Add Mode → pick date and open sheet
+                                        draftWhen = Calendar.current.startOfDay(for: date)
+                                        showingAdd = true
+                                        isAddMode = false
+                                    } else {
+                                        // Normal behavior → select date
+                                        selectedDate = date
+                                    }
+                                }
+                            )
+                                .id(calendarMonthID(monthAnchor))
                                 .padding(.horizontal, 20)
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear.preference(
+                                            key: MonthPosKey.self,
+                                            value: [MonthPos(
+                                                id: calendarMonthID(monthAnchor),
+                                                y: geo.frame(in: .named("calScroll")).minY,
+                                                date: monthAnchor
+                                            )]
+                                        )
+                                    }
+                                )
                         }
-                        Spacer(minLength: 64)
+                    }
+                }
+                .coordinateSpace(name: "calScroll")
+                .onPreferenceChange(MonthPosKey.self) { positions in
+                    guard !positions.isEmpty else { return }
+                    // Use the month whose top is closest to the top of the scroll area
+                    let sorted = positions.sorted { a, b in
+                        if a.y >= 0, b.y >= 0 { return a.y < b.y }
+                        return abs(a.y) < abs(b.y)
+                    }
+                    if let first = sorted.first {
+                        currentHeaderMonth = first.date
+                        persistedMonthID = calendarMonthID(first.date)
+                    }
+                }
+                .onAppear {
+                    // Coming back from another tab: always jump to TODAY
+                    jumpToToday(proxy)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .calendarTabReselected)) { _ in
+                    // Already on Calendar and tab is tapped again → do nothing.
+                    // If anything tried to move us, restore to persisted month without animation.
+                    proxy.scrollTo(persistedMonthID, anchor: .top)
+                }
+                .overlay(alignment: .top) {
+                    if isAddMode {
+                        HStack(spacing: 8) {
+                            Image(systemName: "hand.point.up.left.fill")
+                            Text("Tap a date to add")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .animation(.spring(response: 0.35, dampingFraction: 0.9), value: isAddMode)
+                    }
+                }
+                .overlay {
+                    if isAddMode {
+                        Color.black.opacity(0.04)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .onTapGesture {
+                    // Tap outside → exit Add Mode
+                    if isAddMode { isAddMode = false }
+                }
+                .sheet(isPresented: $showingAdd) {
+                    AddQuickSheet(title: $draftTitle, when: $draftWhen) {
+                        // TODO: hook into Today’s data store. For now, dismiss only.
+                        showingAdd = false
+                    } onCancel: {
+                        showingAdd = false
                     }
                 }
             }
-            .navigationTitle("Calendar")  // Large title like Today
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
     }
 
-    // MARK: - Helpers
-    private func addMonths(to base: Date, _ offset: Int) -> Date {
-        Calendar.current.date(byAdding: .month, value: offset, to: base) ?? base
-    }
-    private func startOfMonth(for date: Date) -> Date {
-        let cal = Calendar.current
-        let comps = cal.dateComponents([.year, .month], from: date)
-        return cal.date(from: comps) ?? cal.startOfDay(for: date)
-    }
-    private func monthID(_ d: Date) -> String {
-        let comps = Calendar.current.dateComponents([.year, .month], from: d)
-        return "m-\(comps.year ?? 0)-\(comps.month ?? 0)"
-    }
-    private func monthTitle(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.locale = .current
-        f.setLocalizedDateFormatFromTemplate("LLLL yyyy")
-        return f.string(from: d)
+    // MARK: - Actions
+
+    private func jumpToToday(_ proxy: ScrollViewProxy) {
+        let id = todayMonthID()
+        withAnimation(.easeOut(duration: 0.35)) {
+            proxy.scrollTo(id, anchor: .top)
+        }
+        selectedDate = Date()
+        persistedMonthID = id
     }
 }
 
-// MARK: - Weekday strip
+// =====================================================
+// MARK: - Month Grid (One Month)
+// =====================================================
 
-private struct WeekdayStrip: View {
-    private var cal: Calendar { Calendar.current }
-    private var symbols: [String] {
-        var s = cal.shortWeekdaySymbols
-        let first = cal.firstWeekday - 1
-        if first > 0 { s = Array(s[first...] + s[..<first]) }
-        return s
-    }
-
-    var body: some View {
-        HStack {
-            ForEach(symbols, id: \.self) { sym in
-                Text(sym.uppercased())
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            }
-        }
-    }
-}
-
-// MARK: - Month grid
-
-private struct MonthGridSection: View {
+private struct CalendarMonthGridSection: View {
     let monthAnchor: Date
     @Binding var selected: Date
+    var onDayTapped: (Date) -> Void
 
-    private var cal: Calendar { Calendar.current }
-    private var cols: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 12), count: 7) }
-
-    private enum Cell: Equatable { case empty, day(Date) }
-
-    private var cells: [Cell] {
-        let range = cal.range(of: .day, in: .month, for: monthAnchor) ?? 1..<31
-        let dayCount = range.count
-
-        var comps = cal.dateComponents([.year, .month], from: monthAnchor)
-        comps.day = 1
-        let firstOfMonth = cal.date(from: comps) ?? monthAnchor
-
-        let firstWeekday = cal.firstWeekday
-        let weekdayOfFirst = cal.component(.weekday, from: firstOfMonth)
-        var leading = (weekdayOfFirst - firstWeekday)
-        if leading < 0 { leading += 7 }
-
-        let days: [Date] = (0..<dayCount).compactMap { i in
-            cal.date(byAdding: .day, value: i, to: firstOfMonth)
+    private var days: [Date] {
+        let cal = Calendar.current
+        let dayRange = cal.range(of: .day, in: .month, for: monthAnchor) ?? (1..<32)
+        return dayRange.compactMap { day in
+            cal.date(byAdding: .day, value: day - 1, to: monthAnchor)
         }
-
-        let filled = leading + dayCount
-        let trailing = (7 - (filled % 7)) % 7
-
-        return Array(repeating: .empty, count: leading)
-            + days.map { .day($0) }
-            + Array(repeating: .empty, count: trailing)
     }
 
+    private var leadingBlanks: Int {
+        let cal = Calendar.current
+        let firstWeekday = cal.component(.weekday, from: monthAnchor)
+        return (firstWeekday - cal.firstWeekday + 7) % 7
+    }
+
+    private var totalCells: Int { leadingBlanks + days.count }
+    private var rows: Int { Int(ceil(Double(totalCells) / 7.0)) }
+
     var body: some View {
-        LazyVGrid(columns: cols, spacing: 12) {
-            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                switch cell {
-                case .empty:
-                    Color.clear
-                        .frame(height: 60)
-                        .frame(maxWidth: .infinity)
-                case .day(let d):
-                    DayCell(
-                        day: d,
-                        isSelected: cal.isDate(d, inSameDayAs: selected)
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                            selected = d
+        VStack(spacing: 12) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: 12) {
+                    ForEach(0..<7, id: \.self) { col in
+                        let idx = row * 7 + col
+                        if idx < leadingBlanks {
+                            EmptyCell()
+                        } else {
+                            let dayIndex = idx - leadingBlanks
+                            if dayIndex < days.count {
+                                DayCard(date: days[dayIndex], selected: $selected) {
+                                    onDayTapped(days[dayIndex])
+                                }
+                            } else {
+                                EmptyCell()
+                            }
                         }
                     }
                 }
             }
         }
-        .padding(.top, 6)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func EmptyCell() -> some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(Color.clear)
+            .frame(height: 64)
+            .frame(maxWidth: .infinity)
     }
 }
 
-// MARK: - Day cell
+// =====================================================
+// MARK: - Day Card
+// =====================================================
 
-private struct DayCell: View {
-    let day: Date
-    let isSelected: Bool
+private struct DayCard: View {
+    let date: Date
+    @Binding var selected: Date
+    var onTap: () -> Void
+
+    private var isToday: Bool { Calendar.current.isDateInToday(date) }
+    private var isSelected: Bool { Calendar.current.isDate(date, inSameDayAs: selected) }
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14)
-                .fill(isSelected ? Color.accentColor.opacity(0.22)
-                                 : Color.secondary.opacity(0.08))
-                .shadow(color: .black.opacity(isSelected ? 0.12 : 0.06), radius: 3, y: 2)
+        Button(action: onTap) {
+            ZStack {
+                // Base background
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(baseBackground)
 
-            Text(dayNumber(day))
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.primary)
+                // Border highlight
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(selectionStroke, lineWidth: isSelected ? 2.5 : (isToday ? 1.5 : 0))
+                    .opacity((isSelected || isToday) ? 1 : 0)
+
+                Text("\(Calendar.current.component(.day, from: date))")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.primary : (isToday ? Color.blue : Color.secondary))
+            }
+            .frame(height: 64)
         }
-        .frame(height: 60)
+        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .frame(maxWidth: .infinity)
     }
 
-    private func dayNumber(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.locale = .current
-        f.setLocalizedDateFormatFromTemplate("d")
-        return f.string(from: d)
+    private var baseBackground: Color {
+        if isSelected { return Color.accentColor.opacity(0.25) }
+        if isToday { return Color.blue.opacity(0.15) }
+        return Color.secondary.opacity(0.08)
+    }
+
+    private var selectionStroke: Color {
+        if isSelected { return .accentColor }
+        if isToday { return .blue }
+        return .clear
+    }
+}
+
+// =====================================================
+// MARK: - AddQuickSheet (lightweight add from Calendar)
+// =====================================================
+
+private struct AddQuickSheet: View {
+    @Binding var title: String
+    @Binding var when: Date
+    var onSave: () -> Void
+    var onCancel: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Title") {
+                    TextField("Task title", text: $title)
+                        .textInputAutocapitalization(.sentences)
+                }
+                Section("Date") {
+                    DatePicker("When", selection: $when, displayedComponents: [.date, .hourAndMinute])
+                }
+            }
+            .navigationTitle("New Task")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onCancel(); dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") { onSave(); dismiss() }
+                        .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
     }
 }
