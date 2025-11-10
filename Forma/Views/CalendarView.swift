@@ -89,6 +89,7 @@ struct CalendarView: View {
     @State private var suppressNextTap: Bool = false
 
     var body: some View {
+        
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
 
@@ -136,24 +137,19 @@ struct CalendarView: View {
                     } label: {
                         Image(systemName: isAddMode ? "xmark" : "plus")
                             .font(.headline)
-                            .padding(.horizontal, 14)
+                            .padding(.horizontal, 16)
                             .padding(.vertical, 10)
                             .frame(minWidth: 44)
                             .animation(.easeOut(duration: 0.15), value: isAddMode)
                             .accessibilityLabel(isAddMode ? "Cancel add" : "Add task")
                             .accessibilityHint(isAddMode ? "Exit add mode" : "Tap to add. Long-press to choose a date from the calendar.")
                     }
-                    .background(
-                        Group {
-                            if isAddMode { Color.accentColor.opacity(0.12) } else { Color.clear }
-                        }, in: Capsule()
-                    )
-                    .overlay(
-                        Capsule().stroke(isAddMode ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.08), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(isAddMode ? 0.28 : 0.25), radius: 12, y: 4)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
                     .contentShape(Capsule())
                     .buttonStyle(.plain)
+                    .tint(isAddMode ? .accentColor : .primary)
                     .simultaneousGesture(
                         LongPressGesture(minimumDuration: 0.4).onEnded { _ in
                             // Long-press → enter Add Mode (stays active until canceled)
